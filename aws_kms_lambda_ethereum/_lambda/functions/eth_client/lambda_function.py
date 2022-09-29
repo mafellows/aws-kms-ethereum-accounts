@@ -4,11 +4,10 @@
 import logging
 import os
 
-from lambda_helper import (assemble_tx,
-                           get_params,
-                           get_tx_params,
+from lambda_helper import (get_params,
                            calc_eth_address,
-                           get_kms_public_key)
+                           get_kms_public_key,
+                           sign_kms)
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "WARNING")
 LOG_FORMAT = "%(levelname)s:%(lineno)s:%(message)s"
@@ -45,21 +44,27 @@ def lambda_handler(event, context):
     #  "nonce": 0}
     elif operation == 'sign':
 
-        if not (event.get('dst_address') and event.get('amount', -1) >= 0 and event.get('nonce', -1) >= 0):
-            return {'operation': 'sign',
-                    'error': 'missing parameter - sign requires amount, dst_address and nonce to be specified'}
+        if not (event.get('kyc_id') and event.get('address') and 
+                event.get('cause_id', -1) >= 0 and event.get('timeout', -1) >= 0): 
+            return {
+                'operation': 'sign', 
+                'error': 'missing parameter - sign requires kyc_id, address, cause_id and timeout to be specified'
+            }
 
         # get key_id from environment varaible
         key_id = os.getenv('KMS_KEY_ID')
 
-        # get destination address from send request
-        dst_address = event.get('dst_address')
+        # get the KYC id 
+        kyc_id = event.get('kyc_id')
 
-        # get amount from send request
-        amount = event.get('amount')
+        # get Address to check approval for
+        address = event.get('address')
 
-        # nonce from send request
-        nonce = event.get('nonce')
+        # cause id
+        cause_id = event.get('cause_id')
+
+        # timeout - in unix time. 
+        timeout = event.get('timeout')
 
         # download public key from KMS
         pub_key = get_kms_public_key(key_id)
@@ -67,14 +72,14 @@ def lambda_handler(event, context):
         # calculate the Ethereum public address from public key
         eth_checksum_addr = calc_eth_address(pub_key)
 
-        # collect raw parameters for Ethereum transaction
-        tx_params = get_tx_params(dst_eth_addr=dst_address,
-                                  amount=amount,
-                                  nonce=nonce)
+        # Create a plaintext message
+        plaintext = f"{kyc_id},{address},{cause_id},{timeout}"
 
-        # assemble Ethereum transaction and sign it offline
-        raw_tx_signed = assemble_tx(tx_params=tx_params,
-                                    params=params,
-                                    eth_checksum_addr=eth_checksum_addr)
+        # Sign the message  
+        signature = sign_kms(params.get_kms_key_id(), plaintext)    
 
-        return {"signed_tx": raw_tx_signed}
+        # Return the signature & the original message. 
+        return {
+            "signature": signature,
+            "plaintext": plaintext
+        }
